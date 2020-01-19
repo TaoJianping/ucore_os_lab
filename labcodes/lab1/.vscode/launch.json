@@ -16,9 +16,9 @@
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb",
             "miDebuggerServerAddress": "localhost:1234",
-            // "externalConsole": true,
+            "externalConsole": true,
             // "launchCompleteCommand": "exec-run",
-            // "preLaunchTask": "Launch QEMU",
+            "preLaunchTask": "Start QEMU",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
