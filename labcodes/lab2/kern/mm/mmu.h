@@ -207,6 +207,7 @@ struct taskstate {
 #define PTX(la) ((((uintptr_t)(la)) >> PTXSHIFT) & 0x3FF)
 
 // page number field of address
+// PTXSHIFT -> 右移12位， 12位->4kb
 #define PPN(la) (((uintptr_t)(la)) >> PTXSHIFT)
 
 // offset in page

@@ -104,6 +104,14 @@ default_init(void) {
     nr_free = 0;
 }
 
+// Page->ref: ref表示这页被页表的引用记数如果这个页被页表引用了，
+//           即在某页表中有一个页表项设置了一个虚拟页到这个Page管理的物理页的映射关系，就会把Page的ref加一；
+//           反之，若页表项取消，即映射关系解除，就会把Page的ref减一。
+
+// Page->flags: flags表示此物理页的状态标记
+//                  #define PG_reserved                 0       bit 0表示此页是否被保留（reserved），如果是被保留的页，则bit 0会设置为1，且不能放到空闲页链表中，即这样的页不是空闲页，不能动态分配与释放。
+//                  #define PG_property                 1       bit 1表示此页是否是free的，如果设置为1，表示这页是free的，可以被分配；如果设置为0，表示这页已经被分配出去了，不能被再二次分配。
+
 static void
 default_init_memmap(struct Page *base, size_t n) {
     assert(n > 0);
@@ -111,12 +119,14 @@ default_init_memmap(struct Page *base, size_t n) {
     for (; p != base + n; p ++) {
         assert(PageReserved(p));
         p->flags = p->property = 0;
+        SetPageProperty(p);
+        ClearPageReserved(p);
         set_page_ref(p, 0);
     }
     base->property = n;
     SetPageProperty(base);
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
+    list_add_before(&free_list, &(base->page_link));
 }
 
 static struct Page *
@@ -135,6 +145,10 @@ default_alloc_pages(size_t n) {
         }
     }
     if (page != NULL) {
+        for (size_t i = 0; i < n; i++)
+        {
+            ClearPageProperty(page + i);
+        }
         list_del(&(page->page_link));
         if (page->property > n) {
             struct Page *p = page + n;
@@ -142,40 +156,93 @@ default_alloc_pages(size_t n) {
             list_add(&free_list, &(p->page_link));
     }
         nr_free -= n;
-        ClearPageProperty(page);
     }
     return page;
 }
 
+/*
+ * (5) `default_free_pages`:
+ *  re-link the pages into the free list, and may merge small free blocks into
+ * the big ones.
+ *  (5.1)
+ *      According to the base address of the withdrawed blocks, search the free
+ *  list for its correct position (with address from low to high), and insert
+ *  the pages. (May use `list_next`, `le2page`, `list_add_before`)
+ *  (5.2)
+ *      Reset the fields of the pages, such as `p->ref` and `p->flags` (PageProperty)
+ *  (5.3)
+ *      Try to merge blocks at lower or higher addresses. Notice: This should
+ *  change some pages' `p->property` correctly.
+ * 
+ * 释放物理内存帧
+ * 参数：
+ *      struct Page *base：第一个Page的基地址
+ *      size_t n：个数
+ * 过程：
+ *      1. 把n个page free掉
+ *          a. 设置p->flag 的 PG_property = 1
+ *      2. 把n个page 作为一个整体放回free_list
+ *      3. 这n个page的第一个Page要计算他的n
+ */
 static void
 default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
     struct Page *p = base;
     for (; p != base + n; p ++) {
+        // 这个page 不能使reserved的，也不能是valid的
+        // 所以这边有个检查
+        //      1. PageReserved(p) == 0
+        //      2. PageProperty(p) == 0
         assert(!PageReserved(p) && !PageProperty(p));
         p->flags = 0;
+        SetPageProperty(p);
         set_page_ref(p, 0);
     }
+
     base->property = n;
-    SetPageProperty(base);
     list_entry_t *le = list_next(&free_list);
-    while (le != &free_list) {
-        p = le2page(le, page_link);
-        le = list_next(le);
-        if (base + base->property == p) {
-            base->property += p->property;
-            ClearPageProperty(p);
-            list_del(&(p->page_link));
-        }
-        else if (p + p->property == base) {
-            p->property += base->property;
-            ClearPageProperty(base);
-            base = p;
-            list_del(&(p->page_link));
+    if (le == &free_list) {
+        list_add((&free_list), &(base->page_link));
+    } else {
+        while (le != &free_list) 
+        {
+            p = le2page(le, page_link);
+
+            if (base < p)
+            {
+                list_add_before(&(p->page_link), &(base->page_link));
+                if (base + base->property == p) 
+                {
+                    base->property += p->property;
+                    p->property = 0;
+                    list_del(&(p->page_link));
+                } 
+                list_entry_t *prev_le = list_prev(&(base->page_link));
+                struct Page *prev_p = le2page(prev_le, page_link);
+                if (prev_p + prev_p->property == base) 
+                {
+                    prev_p->property += base->property;
+                    base->property = 0;
+                    list_del(&(base->page_link));
+                }
+                break;
+            } else {
+                if (list_next(le) == &free_list) 
+                {
+                    list_add(&(p->page_link), &(base->page_link));
+                    if (p + p->property == base) 
+                    {
+                        p->property += base->property;
+                        base->property = 0;
+                        list_del(&(base->page_link));
+                    }
+                }
+                le = list_next(le);
+            }
         }
     }
+    
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
 }
 
 static size_t

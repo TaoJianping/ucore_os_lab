@@ -191,7 +191,8 @@ static void
 page_init(void) {
     struct e820map *memmap = (struct e820map *)(0x8000 + KERNBASE);
     uint64_t maxpa = 0;
-
+    // memmap就是bios中断获取的物理内存的地址分布
+    // 我们用来求得maxpa物理内存的最大地址
     cprintf("e820map:\n");
     int i;
     for (i = 0; i < memmap->nr_map; i ++) {
@@ -210,13 +211,15 @@ page_init(void) {
 
     extern char end[];
 
+    // maxpa: 就是物理地址的最大地址， 页数（4kb） = 物理内存的最大地址 / PageSize 
     npage = maxpa / PGSIZE;
+    // end是一个在链接的时候指定的ucore的结束地址，pages就是对他做些对齐，从这里开始是我们能用的内存空间
     pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
-
+    // 我们把用一个page table 表示这些地址被我们给占用了。之后初始化的时候把他重新标识可用
     for (i = 0; i < npage; i ++) {
         SetPageReserved(pages + i);
     }
-
+    // 空闲空间的起始地址 -> pages + page table 的 size ，freemem是我们真正可以开始使用的地址，也是我们要初始化到free list 的地址空间
     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
 
     for (i = 0; i < memmap->nr_map; i ++) {
@@ -359,6 +362,15 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
     }
     return NULL;          // (8) return page table entry
 #endif
+    pde_t* pde = boot_pgdir[PDX(la)];
+    if (!(*pde | PTE_P) && create)
+    {
+        struct Page * p = alloc_page();
+        uintptr_t pa = page2pa(p);
+        uintptr_t kva = KADDR(pa);
+        set_page_ref(p, 1);
+    }
+
 }
 
 //get_page - get related Page struct for linear address la using PDT pgdir
